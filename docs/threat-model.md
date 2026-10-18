@@ -1,0 +1,19 @@
+# Threat model (STRIDE-lite)
+
+| Threat | Mitigation in this repo |
+|---|---|
+| **S**poofing — fake outage reports | Sensor reports outrank customer calls (SOP-01); gateway is read-only so reports can't be forged via the agent |
+| **T**ampering — altering the audit trail | Hash-chained audit; `verify_chain()` detects any modification |
+| **R**epudiation — "I never approved that" | ConfirmationGate records approver name per action in the audit log |
+| **I**nformation disclosure — PII in feedback | `pii.scrub()` redacts email/phone/SSN before storage; error paths never echo row data |
+| **D**enial of service — runaway queries | 100-row LIMIT cap; single-statement rule; one retry then escalate |
+| **E**levation — agent issuing risky orders | Rolling blackouts + mutual aid always need human confirmation; unqualified crews never dispatched |
+
+## LLM-specific (OWASP LLM Top 10, where applicable)
+
+- **Prompt injection:** the text-to-SQL layer uses keyword intents + fixed
+  templates, not free-form generation — injected text can't become SQL.
+- **Excessive agency:** the agent cannot write to the database at all
+  (SEC-SELECT-01/02); physical actions are confirmation-gated.
+- **Misinformation:** storm signal returns an explicit gap when live data
+  is missing; SOP RAG returns not-found instead of inventing procedure.
