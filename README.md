@@ -5,7 +5,7 @@
 > and restoration tracking. Deterministic and auditable: read-only
 > text-to-SQL over synthetic grid telemetry, a transparent crew-dispatch
 > optimizer (proximity × skill × SLA, scored 92.8 for the anchor outage),
-> and human confirmation gates on every risky action. **81 tests green**,
+> and human confirmation gates on every risky action. **95 tests green**,
 > stdlib only, no model required.
 
 ## Problem → approach → outcome
@@ -90,7 +90,7 @@ domain logic is shared with the other two.
 ## Run it
 
 ```bash
-python3 -m pytest tests/ -q        # 81 tests, stdlib only
+python3 -m pytest tests/ -q        # 95 tests, stdlib only
 python3 scripts/count_tests.py     # prints the real total
 pip install streamlit              # optional, demo only
 streamlit run demo/app.py
@@ -121,7 +121,7 @@ streamlit run demo/app.py
   per-outage distance table is needed before advising on other outages.
 - A crew matching some but not all required skills can still be chosen
   (partial skill points); a stricter carrier would make every skill mandatory.
-- The 81 tests are regression checks on synthetic data, not quality
+- The 95 tests are regression checks on synthetic data, not quality
   claims about real grid operations.
 
 ## Standardization review (2026-10-18)
@@ -150,9 +150,26 @@ Test count (also checked by CI):
 
 <!-- run: python scripts/count_tests.py -->
 ```text
-81 tests collected
+95 tests collected
 ```
 <!-- /run -->
+
+### Authorizer template sync (2026-10-18)
+
+The SQLite authorizer was updated to the shared strict, view-aware version.
+A base-table read is allowed only when SQLite reports it on behalf of one of
+the allowed views (the authorizer's view-name argument). A read with no view
+name is denied. `sqlite_master` is always denied, even if listed, and so is
+`load_extension`. The old version falsely denied a self-join of `v_crew_status`; a regression test covers it.
+`tests/test_authorizer_sync.py` drives the authorizer directly, independent
+of the text check. It covers comma joins and comment-obfuscated joins with a
+base table, every view, and view self-joins.
+
+Known residual: a read that uses no columns of a table behind a view is
+allowed, because SQLite reports the unused side of a view self-join the same
+way. So `SELECT count(*) FROM <that table>` or `EXISTS (SELECT 1 FROM ...)`
+can still reveal a row count, but no column data. Any column reference is
+denied.
 
 ## Built vs planned
 
