@@ -12,6 +12,9 @@ Bands:
 - medium   : score >= 1_000
 - low      : otherwise
 
+Floor: an outage that affects a critical facility (hospital, water plant)
+is never below "high", however few customers are on the feeder.
+
 The classifier returns the band plus a transparent breakdown so an
 operator (or an eval) can audit exactly why an outage was tiered.
 """
@@ -49,10 +52,14 @@ def classify(outage_id: str, customers_out: int,
         band = "medium"
     else:
         band = "low"
+    floored = critical_facility and band in ("medium", "low")
+    if floored:
+        band = "high"
     breakdown = (
         f"{customers_out} customers x {crit_mult} "
         f"({'critical facility' if critical_facility else 'no critical facility'}) "
         f"x {etr_mult} (ETR {etr_hours}h) = {score:.0f} -> {band}"
+        + (" (critical-facility floor)" if floored else "")
     )
     return SeverityResult(
         outage_id=outage_id, score=score, band=band,

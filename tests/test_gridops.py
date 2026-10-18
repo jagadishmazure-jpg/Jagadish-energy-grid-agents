@@ -7,10 +7,8 @@ import pytest
 
 from gridops import text2sql
 from gridops.audit import AuditLog
-from gridops.demo_helpers import (ask, dispatch_plan, ensure_db,
-                                  outage_summary)
-from gridops.dispatch import (Crew, CrewRoster, NoCrewAvailable, dispatch,
-                              score_crew)
+from gridops.demo_helpers import ask, dispatch_plan, ensure_db, outage_summary
+from gridops.dispatch import Crew, CrewRoster, NoCrewAvailable, dispatch, score_crew
 from gridops.escalation import ConfirmationGate, tier_for_band
 from gridops.feedback import FeedbackError, capture, list_feedback
 from gridops.orchestrator import Orchestrator
@@ -19,7 +17,6 @@ from gridops.severity import classify
 from gridops.sop_rag import SOPRAG
 from gridops.storm import FakeStorm, LiveStormBackend, StormGap
 from gridops.telemetry import build_db
-from gridops import views
 from gridops.views import GatewayError, run_query, validate
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,7 +74,8 @@ def test_seed_determinism(tmp_path):
     n2 = c2.execute("SELECT COUNT(*) FROM outages").fetchone()
     r1 = c1.execute("SELECT mw FROM load_readings ORDER BY reading_id").fetchall()
     r2 = c2.execute("SELECT mw FROM load_readings ORDER BY reading_id").fetchall()
-    c1.close(); c2.close()
+    c1.close()
+    c2.close()
     assert n1 == n2 and r1 == r2
 
 
@@ -171,7 +169,7 @@ def test_answer_retry_then_escalate(db, monkeypatch):
         return (["c"], [(1,)])
 
     monkeypatch.setattr(text2sql, "run_query", fake)
-    res = text2sql.answer(db, "active outages")
+    text2sql.answer(db, "active outages")
     assert len(calls) == 2  # exactly one retry
 
     def always_fail(db_path, sql):
@@ -498,3 +496,34 @@ def test_demo_ask(tmp_path):
     db_path = ensure_db(tmp_path / "demo.db")
     res = ask(db_path, SOPS, "show active outages")
     assert "outages" in res["subtasks"]
+
+
+# ---------- review fixes (grokbot-portfolio, 2026-10-18) ----------
+
+def test_unqualified_crew_never_wins_on_proximity():
+    crews = [Crew("C-NEAR", ("vegetation",), 0.0, "day", "available"),
+             Crew("C-FAR", ("overhead", "switching"), 25.0, "day", "available")]
+    assert dispatch(crews, {"overhead", "switching"}, "critical").crew_id == "C-FAR"
+
+
+def test_only_unqualified_crews_raises():
+    crews = [Crew("C-NEAR", ("vegetation",), 0.0, "day", "available")]
+    with pytest.raises(NoCrewAvailable):
+        dispatch(crews, {"overhead"}, "critical")
+
+
+def test_day_shift_preferred_over_night_for_critical():
+    day = score_crew(Crew("D", ("overhead",), 5.0, "day", "available"), {"overhead"}, "critical")
+    night = score_crew(Crew("N", ("overhead",), 5.0, "night", "available"), {"overhead"}, "critical")
+    assert day.sla_points == 100.0 and night.sla_points == 70.0 and day.score > night.score
+
+
+def test_critical_facility_is_never_below_high():
+    r = classify("OUT-X", 150, True, 2.0)
+    assert r.band == "high" and "floor" in r.breakdown
+    assert classify("OUT-Y", 150, False, 2.0).band == "low"
+
+
+def test_scrub_parenthesised_phone():
+    cleaned, n = scrub("call (555) 123-4567")
+    assert cleaned == "call [PHONE]" and n == 1

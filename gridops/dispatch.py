@@ -9,10 +9,11 @@ For an outage needing a skill set, every *available* crew is scored:
 - proximity_points: 100 at the depot, decaying 4 points per km
   (floor 0).
 - skill_points: 100 * (matched required skills / required skills).
-- sla_points: 100 if the crew's shift covers the outage's urgency
-  window (critical/high -> day shift preferred and night accepted;
-  crews on a *committed* status or wrong shift for the window score 0
-  and are excluded).
+  A crew that matches *none* of the required skills is excluded, however
+  close it is (proximity alone must never send an unqualified crew).
+- sla_points: 100 for a day-shift crew; 70 for a night-shift crew, which is
+  accepted only for critical/high outages (night crews are excluded for
+  medium/low). Crews not in ``available`` status are excluded.
 
 The winner is returned with a transparent per-assignment breakdown.
 When no crew qualifies, a NoCrewAvailable error is raised instead of
@@ -43,6 +44,9 @@ class Assignment:
     sla_points: float
 
 
+NIGHT_SLA_POINTS = 70.0
+
+
 class NoCrewAvailable(Exception):
     """Raised when no dispatchable crew exists for the outage."""
 
@@ -60,8 +64,10 @@ def score_crew(crew: Crew, required_skills: set, severity_band: str) -> Assignme
         return None
     proximity = max(0.0, 100.0 - 4.0 * crew.depot_km)
     matched = required_skills & set(crew.skills)
+    if required_skills and not matched:
+        return None  # unqualified: never dispatched on proximity alone
     skill = 100.0 * (len(matched) / len(required_skills)) if required_skills else 100.0
-    sla = 100.0  # shift window already enforced above
+    sla = NIGHT_SLA_POINTS if crew.shift == "night" else 100.0
     score = 0.45 * proximity + 0.35 * skill + 0.20 * sla
     breakdown = (
         f"{crew.crew_id}: proximity {proximity:.1f} (depot {crew.depot_km} km) x0.45 "

@@ -32,4 +32,5 @@ streamlit run demo/app.py
 - `gridops/telemetry.py` — regenerate data: `build_db(path)` (seed 42).
 - `gridops/dispatch.py` — retune weights (0.45/0.35/0.20) per utility policy.
 - `gridops/severity.py` — retune bands/thresholds per regulator rules.
-- `gridops/views.py` — gateway rules SEC-SELECT-01/02/03.
+- `gridops/views.py` — gateway rules SEC-SELECT-01/02/03/04 (04 = views only,
+  enforced by `gridops/authz.py`).

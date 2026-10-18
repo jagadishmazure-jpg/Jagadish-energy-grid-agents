@@ -9,9 +9,8 @@ and never returns a partial answer silently.
 from __future__ import annotations
 
 import re
-import sqlite3
 
-from .views import create_views, run_query
+from .views import run_query
 
 
 class IntentNotFound(Exception):
