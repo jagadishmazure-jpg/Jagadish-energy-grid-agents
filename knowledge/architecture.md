@@ -11,7 +11,7 @@ flowchart TB
 
     subgraph Agent
         ORCH[ReAct orchestrator<br/>multi-intent fan-out]
-        T2S[Text-to-SQL<br/>SELECT-only gateway<br/>SEC-SELECT-01/02/03]
+        T2S[Text-to-SQL<br/>SELECT-only gateway<br/>SEC-SELECT-01..04<br/>+ SQLite authorizer]
         SEV[Severity classifier<br/>customers × critical × ETR]
         DSP[Crew-dispatch optimizer<br/>proximity × skill × SLA]
         RAG[TF-IDF SOP RAG<br/>cited answers]

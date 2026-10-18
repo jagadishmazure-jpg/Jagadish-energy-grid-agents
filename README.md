@@ -5,7 +5,7 @@
 > and restoration tracking. Deterministic and auditable: read-only
 > text-to-SQL over synthetic grid telemetry, a transparent crew-dispatch
 > optimizer (proximity × skill × SLA, scored 92.8 for the anchor outage),
-> and human confirmation gates on every risky action. **67 tests green**,
+> and human confirmation gates on every risky action. **81 tests green**,
 > stdlib only, no model required.
 
 ## Problem → approach → outcome
@@ -25,7 +25,8 @@ production ADMS integration; only the data source and the planner change.
 2. The ReAct orchestrator decomposes a question into sub-tasks and routes
    each to one tool — never guessing, escalating when nothing matches.
 3. Text-to-SQL runs through a SELECT-only gateway
-   (`SEC-SELECT-01/02/03`); one simplified retry, then escalation.
+   (`SEC-SELECT-01/02/03`, plus `SEC-SELECT-04`: views only, enforced by a
+   SQLite authorizer); one simplified retry, then escalation.
 4. The severity classifier and dispatch optimizer score live rows with
    transparent breakdowns.
 5. T1–T4 tiers and confirmation gates decide what needs a human.
@@ -72,16 +73,24 @@ CREW-A-07: proximity 84.0 (depot 4.0 km) x0.45 + skill 100.0 (matched ['overhead
 ## How this differs from coldchain/retail
 
 Cold-chain tracks reefer telemetry and temperature compliance; retail
-tracks stores, SKUs, and suppliers. This repo operates a power grid:
-outage severity classification, skill-constrained crew dispatch, load
-anomaly detection, and storm-driven escalation — none of which exist in
-the other two. The shared spine (gateway, RAG, audit, feedback) is
-deliberate; the domain logic is not shared.
+tracks stores, SKUs, and suppliers. This repo operates a power grid, and the
+code that only exists here is:
+
+- `severity.py`: customers out x critical-facility multiplier x long-ETR
+  multiplier, banded, with a critical-facility floor at "high".
+- `dispatch.py`: a weighted crew score (0.45 proximity, 0.35 skill, 0.20
+  shift/SLA) that excludes crews with none of the required skills, off-duty
+  crews, and night crews for medium/low outages, and prints its arithmetic.
+- `v_load_anomalies`: feeders running 25%+ over baseline, and a storm-cell
+  feed that degrades to an explicit gap.
+
+The shared spine (gateway, RAG, audit, feedback) is deliberate; none of the
+domain logic is shared with the other two.
 
 ## Run it
 
 ```bash
-python3 -m pytest tests/ -q        # 67 tests, stdlib only
+python3 -m pytest tests/ -q        # 81 tests, stdlib only
 python3 scripts/count_tests.py     # prints the real total
 pip install streamlit              # optional, demo only
 streamlit run demo/app.py
@@ -89,10 +98,12 @@ streamlit run demo/app.py
 
 ## Guardrails and security controls
 
-- SQL gateway: SELECT-only, cited rule IDs, 100-row cap, literals
-  stripped before keyword scanning.
+- SQL gateway: SELECT-only, cited rule IDs, views only (SQLite authorizer,
+  ADR 0001), 100-row cap enforced at fetch time, literals stripped before
+  keyword scanning.
 - Rolling blackouts and mutual-aid requests always need human
-  confirmation; unqualified crews are never dispatched.
+  confirmation; crews matching none of the required skills are never
+  dispatched (tested).
 - ETRs are never published before a crew confirms the cause on site.
 - Feedback free text is PII-scrubbed (email/phone/SSN) before storage.
 - Audit chain is tamper-evident (`verify_chain()`).
@@ -105,18 +116,61 @@ streamlit run demo/app.py
 - TF-IDF RAG has no stemming; singular/plural mismatches can misrank
   (documented, not hidden).
 - The storm "live" backend is a stub returning an explicit gap.
-- The 67 tests are regression checks on synthetic data, not quality
+- Dispatch advice always targets the anchor outage (OUT-SEV-01), and crew
+  distances are stored from feeder F-101 only (`depot_km_from_f101`); a
+  per-outage distance table is needed before advising on other outages.
+- A crew matching some but not all required skills can still be chosen
+  (partial skill points); a stricter carrier would make every skill mandatory.
+- The 81 tests are regression checks on synthetic data, not quality
   claims about real grid operations.
+
+## Standardization review (2026-10-18)
+
+Reviewed against the portfolio standard after the build. Bugs found and fixed, each now pinned by a test:
+
+1. **An unqualified crew could win on proximity.** The README said "unqualified crews are never dispatched", but a crew with none of the required skills still scored 0.45 x proximity + 0.20 x SLA: a vegetation crew at 0 km (65.0) beat a fully skilled line crew at 25 km (55.0). Crews matching no required skill are now excluded; if none qualify, `NoCrewAvailable` is raised.
+2. **The 0.20 SLA term was a constant 100.** Night crews are now 70 points (accepted for critical/high only), so a day crew is preferred at equal distance.
+3. **A hospital outage could be rated "low".** 150 customers x 2.0 = 300 fell below the medium band. An outage affecting a critical facility is now never below "high", and the breakdown says when the floor applied.
+4. **PII scrubber missed `(555) 123-4567`.** The phone pattern needed a word boundary before `(`; replaced with a lookbehind pattern that also takes a `+1` prefix.
+5. **Gateway had no view allowlist.** It blocked writes but any base table or `sqlite_master` was readable through the planner path, and a caller-supplied `LIMIT 100000` skipped the 100-row cap. New rule `SEC-SELECT-04` is enforced by a SQLite authorizer (`authz.py`, ADR 0001), and rows past 100 are never fetched.
+
+Differentiator on the seeded data (regenerated and checked by CI on every push):
+
+<!-- run: python scripts/show_differentiator.py -->
+```text
+12400 customers x 2.0 (critical facility) x 1.5 (ETR 8.0h) = 37200 -> critical
+CREW-A-07 92.8 T1
+150 customers x 2.0 (critical facility) x 1.0 (ETR 2.0h) = 300 -> high (critical-facility floor)
+chosen: CREW-LINE
+NoCrewAvailable: no available crew with skills=['overhead'] for severity=critical
+```
+<!-- /run -->
+
+Test count (also checked by CI):
+
+<!-- run: python scripts/count_tests.py -->
+```text
+81 tests collected
+```
+<!-- /run -->
 
 ## Built vs planned
 
 | Status | Item |
 |---|---|
 | Built | Telemetry, views+gateway, text-to-SQL, severity, dispatch, storm, RAG, orchestrator, tiers+gates, audit, PII-scrubbed feedback, demo, docs |
-| Written, not run | `.github/workflows/ci.yml` (local only; the GitHub App returns 403 on workflow files — added at standardization) |
+| Built | CI on every push: ruff, tests, docs drift check, hashed brand check, gitleaks; CodeQL; Dependabot |
 | Planned | Live storm-provider wiring, embeddings-based RAG, ADMS replica integration |
 
+## Related repos
+
+- [Jagadish-coldchain-logistics-agents](https://github.com/jagadishmazure-jpg/Jagadish-coldchain-logistics-agents), [Jagadish-retail-ops-agents](https://github.com/jagadishmazure-jpg/Jagadish-retail-ops-agents): same spine, other domains
+- [Jagadish-telecom-incident-agents](https://github.com/jagadishmazure-jpg/Jagadish-telecom-incident-agents): field dispatch with a hard skill filter, for comparison
+- [Jagadish-event-driven-agents](https://github.com/jagadishmazure-jpg/Jagadish-event-driven-agents): reacting to telemetry events
+
 ## Docs
+
+- `docs/adr/0001-sqlite-authorizer-backstop.md`
 
 - `knowledge/domain-notes.md`, `knowledge/architecture.md` (Mermaid)
 - `docs/implementation-guide.md`, `docs/interview-points.md`,

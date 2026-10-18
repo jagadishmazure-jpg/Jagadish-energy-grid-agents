@@ -4,7 +4,11 @@ Gateway rules (each rejection cites its rule ID):
 - SEC-SELECT-01: only a single SELECT statement is allowed.
 - SEC-SELECT-02: no write/DDL keywords outside string literals
   (INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, REPLACE, TRUNCATE, ATTACH).
-- SEC-SELECT-03: results are capped at 100 rows (LIMIT injected when absent).
+- SEC-SELECT-03: results are capped at 100 rows (LIMIT injected when absent;
+  rows beyond 100 are never fetched even if the caller asks for more).
+- SEC-SELECT-04: only the four read-only views may be read. Enforced by a
+  SQLite authorizer (gridops/authz.py), so base tables, sqlite_master and
+  pragmas are refused however they are spelled.
 
 String literals are stripped before keyword scanning so a feeder named
 e.g. 'F-101' or a cause like 'storm-damage' inside quotes can never trip
@@ -15,6 +19,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
+
+from . import authz
 
 MAX_ROWS = 100
 
@@ -85,8 +91,16 @@ def run_query(db_path: str, sql: str):
     con = sqlite3.connect(db_path)
     try:
         create_views(con)
-        cur = con.execute(safe)
-        cols = [d[0] for d in cur.description]
-        return cols, cur.fetchall()
+        with authz.views_only(con, VIEWS) as denied:
+            try:
+                cur = con.execute(safe)
+            except sqlite3.DatabaseError:
+                if denied:
+                    raise GatewayError(
+                        f"[SEC-SELECT-04] '{denied[0]}' is not one of the read-only views"
+                    ) from None
+                raise
+            cols = [d[0] for d in cur.description]
+            return cols, cur.fetchmany(MAX_ROWS)
     finally:
         con.close()
